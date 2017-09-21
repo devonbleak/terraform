@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -176,14 +177,25 @@ func (t *Tree) Load(s getter.Storage, mode GetMode) error {
 		copy(path, t.path)
 		path = append(path, m.Name)
 
-		source, err := getter.Detect(m.Source, t.config.Dir, detectors)
+		fmt.Println("ORIG:", m.Source)
+		// Split out the subdir if we have one
+		source, subDir := getter.SourceDirSubdir(m.Source)
+		fmt.Printf("FIRST %q %q\n", source, subDir)
+
+		source, err := getter.Detect(source, t.config.Dir, detectors)
 		if err != nil {
 			return fmt.Errorf("module %s: %s", m.Name, err)
 		}
+		// Check if the detector introduced something new.
+		source, subDir2 := getter.SourceDirSubdir(source)
+		if subDir2 != "" {
+			subDir = subDir2
+		}
+		fmt.Println("SECOND:", source)
+
 		// Get the directory where this module is so we can load it
 		key := strings.Join(path, ".")
-		key = fmt.Sprintf("module.%s-%s", key, m.Source)
-
+		key = fmt.Sprintf("root.%s-%s", key, m.Source)
 		dir, ok, err := getStorage(s, key, source, mode)
 		if err != nil {
 			return err
@@ -193,6 +205,24 @@ func (t *Tree) Load(s getter.Storage, mode GetMode) error {
 				"module %s: not found, may need to be downloaded using 'terraform get'", m.Name)
 		}
 
+		if subDir != "" {
+			fmt.Println("CHECKING:", dir, subDir)
+			matches, err := filepath.Glob(filepath.Join(dir, subDir))
+			if err != nil {
+				return err
+			}
+			if len(matches) == 0 {
+				return fmt.Errorf("subdir %q not found", subDir)
+			}
+			if len(matches) > 1 {
+				return fmt.Errorf("subdir %q matches multiple paths", subDir)
+			}
+			dir = matches[0]
+		}
+
+		fmt.Println("DIR:", dir)
+
+		// Load the configurations.Dir(source)
 		children[m.Name], err = NewTreeModule(m.Name, dir)
 		if err != nil {
 			return fmt.Errorf(
